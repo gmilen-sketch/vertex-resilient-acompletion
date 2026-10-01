@@ -31,27 +31,43 @@ Real-time voice and interactive applications operating under strict end-to-end l
 
 ## State Machine & Request Lifecycle
 
+![State Machine & Request Lifecycle](assets/state-machine-lifecycle.png)
+
+<details>
+<summary>View Editable Mermaid Source</summary>
+
 ```mermaid
-stateDiagram-v2
-    direction LR
-    [*] --> CLOSED: Initial State (100% Standard PayGo)
+%%{init: {'theme': 'base', 'themeVariables': {'primaryColor': '#e8f0fe', 'primaryTextColor': '#0f172a', 'primaryBorderColor': '#1a73e8', 'lineColor': '#334155', 'secondaryColor': '#fef7e0', 'tertiaryColor': '#f8fafc', 'clusterBkg': '#f8fafc', 'clusterBorder': '#475569', 'edgeLabelBackground': '#ffffff', 'textColor': '#0f172a'}}}%%
+flowchart TD
+    classDef blueBox fill:#e8f0fe,stroke:#1a73e8,stroke-width:2px,color:#0f172a,font-weight:bold
+    classDef redBox fill:#fce8e6,stroke:#d93025,stroke-width:2px,color:#0f172a,font-weight:bold
+    classDef amberBox fill:#fef7e0,stroke:#e37400,stroke-width:2px,color:#0f172a,font-weight:bold
+    classDef greenBox fill:#e6f4ea,stroke:#1e8e3e,stroke-width:2px,color:#0f172a,font-weight:bold
 
-    state "CLOSED (Normal Operation)" as CLOSED {
-        [*] --> StandardAttempt1
-        StandardAttempt1: Attempt 1 -> 100% Standard PayGo
-        StandardAttempt1: Warm HTTP/1.1 Pool (4.5s TTFT Watchdog)
-    }
+    subgraph S1["1. STATE: CLOSED (Normal Operation — 100% Standard Pay-As-You-Go)"]
+        direction LR
+        A1["Attempt 1: 100% Standard PayGo<br/>Warm HTTP/1.1 Pool (http2=False)"]:::blueBox --> A2["4.5s First-Token Watchdog<br/>Ignores Empty Role Chunks"]:::blueBox --> A3["Healthy TTFT (< 4.5s)<br/>Return Stream or Unary Response"]:::greenBox
+    end
 
-    state "OPEN (Contention Mitigation)" as OPEN {
-        [*] --> TrafficSplit
-        TrafficSplit: 95% Attempt 1 -> Priority PayGo Direct
-        TrafficSplit: 5% Attempt 1 -> Standard PayGo Canary Probe
-    }
+    subgraph S2["2. ATTEMPT-2 FAILOVER & CIRCUIT BREAKER TRIP GATE"]
+        direction LR
+        B1["Attempt-1 Stall (TTFT >= 4.5s)<br/>Close Stream Immediately (aclose)"]:::redBox --> B2["Attempt 2: Priority PayGo Header<br/>+ Fresh Socket (Connection: close)"]:::redBox --> B3["Trip Gate: >= 3 Timeouts in 30s<br/>OR > 5% Error Rate in 60s"]:::amberBox
+    end
 
-    CLOSED --> OPEN: Trip Condition Met\n(>=3 TTFT Timeouts in 30s OR >5% Error Rate in 60s)
-    OPEN --> OPEN: Canary Fails (TTFT >= 4.5s)\nReset Canary Counter to 0 & Retry on Priority
-    OPEN --> CLOSED: Auto-Recovery Condition Met\n(5 Consecutive Healthy Canaries with TTFT < 3.0s)
+    subgraph S3["3. STATE: OPEN (Contention Mitigation — 95% Priority / 5% Canary)"]
+        direction LR
+        C1["95% Traffic: Direct Priority PayGo<br/>Attempt 1 Bypasses 4.5s Stall"]:::amberBox --> C2["5% Traffic: Standard PayGo Canary<br/>Protected by 4.5s Priority Retry"]:::blueBox --> C3["Auto-Recovery: 5 Healthy Canaries<br/>(TTFT < 3.0s) Reset State to CLOSED"]:::greenBox
+    end
+
+    S1 -- "If Attempt 1 Exceeds 4.5s TTFT Budget" --> S2
+    S2 -- "Threshold Exceeded: Trip Breaker to OPEN" --> S3
+
+    style S1 fill:#f8fafc,stroke:#1a73e8,stroke-width:2px,color:#0f172a
+    style S2 fill:#fff8f7,stroke:#d93025,stroke-width:2px,color:#0f172a
+    style S3 fill:#fffdf5,stroke:#e37400,stroke-width:2px,color:#0f172a
 ```
+
+</details>
 
 ---
 
