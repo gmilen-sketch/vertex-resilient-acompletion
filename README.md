@@ -107,6 +107,8 @@ async def handle_voice_turn(user_utterance: str, cached_prompt_id: str | None = 
 `vertex_resilient_acompletion.py` includes a self-contained `unittest.IsolatedAsyncioTestCase` verification suite covering all 5 resilience layers without requiring live cloud credentials:
 
 ```bash
+python3 tests/test_unit_resilient_client.py
+# Or directly via:
 python3 vertex_resilient_acompletion.py
 ```
 
@@ -123,6 +125,17 @@ test_05_guardrail_helper_uses_flash_lite_and_tight_budget ... ok
 Ran 5 tests in 0.343s
 
 OK
+```
+
+---
+
+## Running the Live Vertex AI End-to-End Integration Test Suite
+
+`tests/test_live_vertex_e2e.py` executes 5 live end-to-end tests against Google Cloud Vertex AI (`vertex_ai/gemini-3.8-flash` and `vertex_ai/gemini-3.5-flash-lite`), verifying unary reassembly, streaming TTFT telemetry, guardrail routing, forced Attempt-1 TTFT timeout failover to Priority Pay-As-You-Go (`X-Vertex-AI-LLM-Shared-Request-Type: priority` + ephemeral `Connection: close` socket), and `OPEN -> CLOSED` canary auto-recovery:
+
+```bash
+export VERTEX_PROJECT="your-gcp-project-id"
+python3 tests/test_live_vertex_e2e.py
 ```
 
 ---
