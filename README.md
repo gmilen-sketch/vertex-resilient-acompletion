@@ -1,5 +1,10 @@
 # Vertex AI Resilient Transport & Adaptive Priority Pay-As-You-Go Wrapper for LiteLLM
 
+[![EMEA Status](https://img.shields.io/badge/EMEA%20Status-Completed-2ea44f?style=flat-square)](https://github.com/cloud-gtm/emea-spark-overview)
+[![SPARK Build Days](https://img.shields.io/badge/SPARK%20Build%20Days-Customer%20Solutions-1a73e8?style=flat-square)](https://github.com/cloud-gtm/emea-spark-overview)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776ab?style=flat-square)](https://www.python.org/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-success?style=flat-square)](LICENSE)
+
 Production-ready, asynchronous Python reference implementation (`vertex_resilient_acompletion.py`) wrapping [`litellm.acompletion`](https://docs.litellm.ai/docs/providers/vertex) for latency-sensitive, real-time Google Cloud Vertex AI workloads (`vertex_ai/gemini-3.8-flash` and `vertex_ai/gemini-3.5-flash-lite`), such as voice agents, real-time contact center assistants, and interactive streaming pipelines.
 
 ---
