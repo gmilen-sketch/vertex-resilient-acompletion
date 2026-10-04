@@ -15,6 +15,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Build & Test
         run: echo "Repository initialized with 15m timeout and concurrency cancellation guardrails."
