@@ -22,4 +22,4 @@ jobs:
         with:
           persist-credentials: false
       - name: Build & Test
-        run: echo "Repository initialized with 15m timeout and concurrency cancellation guardrails."
+        run: python3 -m py_compile vertex_resilient_acompletion.py tests/test_unit_resilient_client.py && python3 tests/test_unit_resilient_client.py

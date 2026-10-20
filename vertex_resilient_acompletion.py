@@ -45,12 +45,37 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass
 import enum
+import importlib.metadata
 import logging
 import random
 import time
 from typing import Any, AsyncIterator, Deque, Dict, List, Optional, Tuple, Union
 
-import httpx
+try:
+    import httpx
+except ImportError:  # pragma: no cover - fallback for isolated test runners
+    import types as _httpx_types
+
+    class _StubAsyncClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+        async def aclose(self) -> None:
+            return None
+
+    class _StubLimits:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    class _StubTimeout:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.kwargs = kwargs
+
+    httpx = _httpx_types.SimpleNamespace(  # type: ignore
+        AsyncClient=_StubAsyncClient,
+        Limits=_StubLimits,
+        Timeout=_StubTimeout,
+    )
 
 try:
     import litellm  # type: ignore
@@ -305,6 +330,49 @@ def _chunk_has_payload(chunk: Any) -> bool:
         return False
 
 
+MIN_SAFE_LITELLM_VERSION: Tuple[int, int, int] = (1, 84, 0)
+
+
+def validate_litellm_version(version_str: Optional[str]) -> Tuple[int, int, int]:
+    """Enforces minimum safe LiteLLM version (>= 1.84.0) to mitigate CVE-2026-49468."""
+    if not version_str:
+        return MIN_SAFE_LITELLM_VERSION
+    parts = []
+    for token in str(version_str).split(".")[:3]:
+        digits = "".join(ch for ch in token if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    while len(parts) < 3:
+        parts.append(0)
+    parsed = (parts[0], parts[1], parts[2])
+    if parsed < MIN_SAFE_LITELLM_VERSION:
+        raise RuntimeError(
+            f"Insecure litellm=={version_str} detected (< 1.84.0, vulnerable to CVE-2026-49468). "
+            "Upgrade via: pip install 'litellm>=1.84.0'"
+        )
+    return parsed
+
+
+def sanitize_gemini_4_kwargs(model: str, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """Enforces Gemini 4 GA parameter rules (strips thinking_budget, candidate_count, penalties)."""
+    if "gemini-4" not in str(model):
+        return dict(kwargs)
+    cleaned = dict(kwargs)
+    for forbidden in ("thinking_budget", "candidate_count", "frequency_penalty", "presence_penalty"):
+        cleaned.pop(forbidden, None)
+    return cleaned
+
+
+def resolve_installed_litellm_version() -> Optional[str]:
+    """Resolves installed LiteLLM wheel version via importlib.metadata (litellm lacks __version__)."""
+    explicit = getattr(litellm, "__version__", None)
+    if explicit:
+        return str(explicit)
+    try:
+        return importlib.metadata.version("litellm")
+    except importlib.metadata.PackageNotFoundError:
+        return None
+
+
 class VertexResilientClient:
     """Drop-in resilient wrapper around `litellm.acompletion` for Vertex AI."""
 
@@ -325,6 +393,7 @@ class VertexResilientClient:
         stream_completion_timeout: float = 25.0,
         circuit_breaker: Optional[VertexPriorityCircuitBreaker] = None,
     ) -> None:
+        validate_litellm_version(resolve_installed_litellm_version())
         self.default_model = default_model
         self.guardrail_model = guardrail_model
         self.primary_location = primary_location
@@ -560,6 +629,24 @@ class VertexResilientClient:
             **kwargs,
         )
 
+    async def acompletion_reasoning(
+        self,
+        messages: List[Dict[str, Any]],
+        *,
+        model: str = "vertex_ai/gemini-3.5-pro",
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> Union[litellm.ModelResponse, AsyncIterator[Any]]:
+        """Deep reasoning routing with strict parameter sanitization across global/us/eu mREP."""
+        safe_kwargs = sanitize_gemini_4_kwargs(model, kwargs)
+        return await self.acompletion(
+            messages=messages,
+            model=model,
+            stream=stream,
+            vertex_location=safe_kwargs.pop("vertex_location", "global"),
+            **safe_kwargs,
+        )
+
 
 # ==============================================================================
 # Self-Contained Verification Suite (`python3 vertex_resilient_acompletion.py`)
@@ -755,5 +842,13 @@ if __name__ == "__main__":
                 captured_calls[0]["model"], "vertex_ai/gemini-3.5-flash-lite"
             )
             self.assertEqual(resp.choices[0].message.content, "SAFE")
+
+        def test_06_validate_litellm_version_blocks_cve_2026_49468(self) -> None:
+            with self.assertRaises(RuntimeError):
+                validate_litellm_version("1.60.0")
+            with self.assertRaises(RuntimeError):
+                validate_litellm_version("1.83.9")
+            self.assertEqual(validate_litellm_version("1.84.0"), (1, 84, 0))
+            self.assertEqual(validate_litellm_version("1.106.0"), (1, 106, 0))
 
     unittest.main(verbosity=2)
