@@ -21,5 +21,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - name: Install Dependencies
+        run: python3 -m pip install --upgrade pip && python3 -m pip install -r requirements.txt
       - name: Build & Test
-        run: echo "Repository initialized with 15m timeout and concurrency cancellation guardrails."
+        run: python3 -m py_compile vertex_resilient_acompletion.py tests/test_unit_resilient_client.py tests/test_live_vertex_e2e.py && python3 tests/test_unit_resilient_client.py && python3 vertex_resilient_acompletion.py

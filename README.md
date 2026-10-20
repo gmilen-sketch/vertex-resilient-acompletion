@@ -19,7 +19,7 @@ Real-time voice and interactive applications operating under strict end-to-end l
    - Even when callers request a standard non-streaming response (`stream=False`), the wrapper executes `:streamGenerateContent` (`stream=True`) on the wire so it can measure exact **Time-To-First-Token (TTFT)** separately from total generation time, then reassembles the chunks transparently into a standard `litellm.ModelResponse`.
 2. **Layer 2 — Payload-Verified TTFT Watchdog (`4.5s`) & Async Generator Cleanup (`await stream.aclose()`)**:
    - Inspects incoming streaming chunks via `_chunk_has_payload(chunk)` and ignores empty initial metadata/role frames (`role="assistant"`, `content=""`), stopping the TTFT timer only when the first real content token, reasoning thought token, or tool-call delta arrives.
-   - If the first non-empty token does not arrive within `ttft_timeout` (`4.5s` default for generation, `2.5s` for guardrails), the wrapper explicitly closes the underlying async generator (`await response_stream.aclose()`) to prevent socket leaks and immediately fails over.
+   - If the first non-empty token does not arrive within `ttft_timeout` (`4.5s` default for generation, `2.0s` default for guardrails), the wrapper explicitly closes the underlying async generator (`await response_stream.aclose()`) to prevent socket leaks and immediately fails over.
 3. **Layer 3 — Dual-Pool `httpx.AsyncClient` (`http2=False` + `Connection: close` Socket Recycling)**:
    - Maintains two isolated `httpx.AsyncClient` pools:
      - `warm_client`: `http2=False` (HTTP/1.1 eliminates head-of-line stream blocking across multiplexed calls), `max_keepalive_connections=20`, `keepalive_expiry=30.0s` for healthy Attempt-1 traffic.
@@ -29,7 +29,7 @@ Real-time voice and interactive applications operating under strict end-to-end l
    - **`OPEN` (Contention Detected — `95%` Priority / `5%` Standard Canary)**: Trips automatically when `>= 3` Standard TTFT stalls occur within 30 seconds or when the rolling 60-second failure rate exceeds `5%`. Routes `95%` of traffic directly to Priority Pay-As-You-Go on Attempt 1 (eliminating the `4.5s` wait penalty) while sending `5%` as **Standard Pay-As-You-Go Canary Probes** (still protected by the `4.5s` Attempt-2 Priority fallback so canary requests never fail).
    - **Auto-Recovery (`OPEN` $\to$ `CLOSED`)**: Once `5` consecutive Standard Canary Probes succeed with `TTFT < 3.0s`, the circuit breaker automatically resets to `CLOSED` (`100%` Standard Pay-As-You-Go).
 5. **Layer 5 — High-Throughput Guardrail Tiering (`gemini-3.5-flash-lite`) & Context Caching (`cached_content`)**:
-   - Provides `acompletion_guardrail()` pre-configured for `vertex_ai/gemini-3.5-flash-lite` with a `2.5s` TTFT budget to offload pre-call/post-call classifiers and safety checks from the primary `vertex_ai/gemini-3.8-flash` pool.
+   - Provides `acompletion_guardrail()` pre-configured for `vertex_ai/gemini-3.5-flash-lite` with a `2.0s` TTFT budget to offload pre-call/post-call classifiers and safety checks from the primary `vertex_ai/gemini-3.8-flash` pool.
    - Natively forwards `cached_content` resource IDs to bypass repeated prefill computation on large static system prompts (`8,000–13,000` tokens).
 
 ---
@@ -51,17 +51,17 @@ flowchart TD
 
     subgraph S1["1. STATE: CLOSED (Normal Operation — 100% Standard Pay-As-You-Go)"]
         direction LR
-        A1["Attempt 1: 100% Standard PayGo<br/>Warm HTTP/1.1 Pool (http2=False)"]:::blueBox --> A2["4.5s First-Token Watchdog<br/>Ignores Empty Role Chunks"]:::blueBox --> A3["Healthy TTFT (< 4.5s)<br/>Return Stream or Unary Response"]:::greenBox
+        A1["Attempt 1: 100% Standard PayGo (Warm HTTP/1.1 Pool, http2=False)"]:::blueBox --> A2["4.5s First-Token Watchdog (Ignores Empty Role Chunks)"]:::blueBox --> A3["Healthy TTFT (< 4.5s) Return Stream or Unary Response"]:::greenBox
     end
 
     subgraph S2["2. ATTEMPT-2 FAILOVER & CIRCUIT BREAKER TRIP GATE"]
         direction LR
-        B1["Attempt-1 Stall (TTFT >= 4.5s)<br/>Close Stream Immediately (aclose)"]:::redBox --> B2["Attempt 2: Priority PayGo Header<br/>+ Fresh Socket (Connection: close)"]:::redBox --> B3["Trip Gate: >= 3 Timeouts in 30s<br/>OR > 5% Error Rate in 60s"]:::amberBox
+        B1["Attempt-1 Stall (TTFT >= 4.5s) Close Stream Immediately (aclose)"]:::redBox --> B2["Attempt 2: Priority PayGo Header + Fresh Socket (Connection: close)"]:::redBox --> B3["Trip Gate: >= 3 Timeouts in 30s OR > 5% Error Rate in 60s"]:::amberBox
     end
 
     subgraph S3["3. STATE: OPEN (Contention Mitigation — 95% Priority / 5% Canary)"]
         direction LR
-        C1["95% Traffic: Direct Priority PayGo<br/>Attempt 1 Bypasses 4.5s Stall"]:::amberBox --> C2["5% Traffic: Standard PayGo Canary<br/>Protected by 4.5s Priority Retry"]:::blueBox --> C3["Auto-Recovery: 5 Healthy Canaries<br/>(TTFT < 3.0s) Reset State to CLOSED"]:::greenBox
+        C1["95% Traffic: Direct Priority PayGo (Attempt 1 Bypasses 4.5s Stall)"]:::amberBox --> C2["5% Traffic: Standard PayGo Canary (Protected by 4.5s Priority Retry)"]:::blueBox --> C3["Auto-Recovery: 5 Healthy Canaries (TTFT < 3.0s) Reset State to CLOSED"]:::greenBox
     end
 
     S1 -- "If Attempt 1 Exceeds 4.5s TTFT Budget" --> S2
@@ -97,7 +97,7 @@ vertex_client = VertexResilientClient(
     primary_location="global",
     fallback_location="europe-west4",
     ttft_timeout=4.5,               # 4.5s non-empty first-token watchdog
-    guardrail_ttft_timeout=2.5,     # 2.5s watchdog for guardrail checks
+    guardrail_ttft_timeout=2.0,     # 2.0s watchdog for guardrail checks
     stream_completion_timeout=25.0, # Comfortably inside a 30s voice gateway SLA
 )
 
@@ -141,9 +141,11 @@ test_02_empty_initial_chunk_trap_triggers_priority_failover ... ok
 test_03_circuit_breaker_trips_and_splits_95_5_canary ... ok
 test_04_canary_auto_recovery_closes_breaker ... ok
 test_05_guardrail_helper_uses_flash_lite_and_tight_budget ... ok
+test_06_reasoning_routing_and_gemini_4_parameter_sanitization ... ok
+test_07_cve_2026_49468_litellm_minimum_version_floor ... ok
 
 ----------------------------------------------------------------------
-Ran 5 tests in 0.343s
+Ran 7 tests in 0.322s
 
 OK
 ```

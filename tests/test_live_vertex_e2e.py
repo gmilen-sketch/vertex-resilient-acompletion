@@ -116,7 +116,7 @@ async def run_live_vertex_e2e_tests() -> Dict[str, Any]:
             primary_location="global",
             fallback_location="global",
             ttft_timeout=4.5,
-            guardrail_ttft_timeout=2.5,
+            guardrail_ttft_timeout=2.0,
             stream_completion_timeout=25.0,
             circuit_breaker=breaker,
         )
